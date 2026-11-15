@@ -12,8 +12,10 @@ import android.text.InputFilter
 import android.text.InputType
 import android.widget.*
 import com.example.bandcontroller.macro.*
+import com.example.bandcontroller.sms.DirectSmsSender
+import com.example.bandcontroller.sms.SmsStatusStore
 
-/** Visible, explicitly armed macro. Opens an SMS or Business draft; never automates the Send button. */
+/** One-shot foreground macro: direct SMS after permission, or a WhatsApp Business draft. */
 class MacroActivity : Activity() {
     private val engine = MacroEngine()
     private val handler = Handler(Looper.getMainLooper())
@@ -28,6 +30,7 @@ class MacroActivity : Activity() {
     private val inputs = mutableListOf<Button>()
     private var draft: MessageDraft? = null
     private var ownsSession = false
+    private var smsSubscription: Int? = null
     private var notificationAsked = false
     private var result = "Disarmed. Review the recipient and message, then arm the macro."
     private var lastInput = "None"
@@ -59,13 +62,13 @@ class MacroActivity : Activity() {
         fun text(value: String, size: Float = 16f) = TextView(this).apply { text = value; textSize = size; setPadding(0,dp(8),0,dp(8)); layout.addView(this) }
         text("Android Macro Engine", 26f)
         text("⏮  →  ⏯  →  ⏭", 28f)
-        text("Previous → Play/Pause → Next within 8 seconds opens your selected messaging app with a draft. You must tap Send there. Each match disarms the macro.")
-        text("Draft action")
+        text("Previous → Play/Pause → Next within 8 seconds sends SMS directly, or opens a WhatsApp Business draft. Each match disarms the macro. SMS uses your SIM and normal charges may apply.")
+        text("Macro action")
         val targets = RadioGroup(this)
         businessChoice = RadioButton(this).apply { id = android.view.View.generateViewId(); text = "WhatsApp Business draft" }
-        smsChoice = RadioButton(this).apply { id = android.view.View.generateViewId(); text = "SMS draft" }
+        smsChoice = RadioButton(this).apply { id = android.view.View.generateViewId(); text = "Send SMS directly (uses your SIM)" }
         targets.addView(businessChoice); targets.addView(smsChoice)
-        targets.check(if (savedInstanceState?.getString("target") == "SMS") smsChoice.id else businessChoice.id)
+        targets.check(if (savedInstanceState?.getString("target") == "WHATSAPP_BUSINESS") businessChoice.id else smsChoice.id)
         layout.addView(targets)
         text("Recipient (country code required for non-Sri Lankan numbers)")
         phone = EditText(this).apply {
@@ -84,7 +87,7 @@ class MacroActivity : Activity() {
         }
         layout.addView(message)
         useBand = CheckBox(this).apply { text = "Use band media controls (optional; touch works without it)" }
-        audible = CheckBox(this).apply { text = "Audible local loop if silent routing fails" }
+        audible = CheckBox(this).apply { text = "Audible local loop (recommended for reliable band input)"; isChecked = true }
         layout.addView(useBand); layout.addView(audible)
         arm = Button(this).apply { setOnClickListener { if (engine.armed) disarm("Disarmed by you.") else armMacro() } }
         layout.addView(arm)
@@ -100,7 +103,8 @@ class MacroActivity : Activity() {
         layout.addView(row)
         status = TextView(this).apply { typeface = Typeface.MONOSPACE; setTextIsSelectable(true); setPadding(0,dp(12),0,dp(12)) }
         layout.addView(status)
-        text("WhatsApp uses only WhatsApp Business in this Android profile. SMS opens your messaging app. There is no automatic sending, account login, delivery verification or band connection detection. Game controls do not trigger this macro.", 13f)
+        targets.setOnCheckedChangeListener { _, _ -> render() }
+        text("SMS sends immediately when the armed sequence matches. Set a default SMS SIM in phone Settings; review the number and message before arming. Long messages can use multiple charged segments. WhatsApp still opens Business for you to tap Send. Game controls do not trigger this macro.", 13f)
         layout.addView(Button(this).apply { text = "Back to Band Controller"; setOnClickListener { finish() } })
         render()
     }
@@ -108,6 +112,18 @@ class MacroActivity : Activity() {
         val normalized = MessageDraft.normalizePhone(phone.text.toString())
         if (normalized == null) { phone.error = "Enter a valid international number, e.g. +94761069598"; return }
         if (message.text.isBlank()) { message.error = "Enter a message"; return }
+        if (smsChoice.isChecked) {
+            if (checkSelfPermission(Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(Manifest.permission.SEND_SMS), 4)
+                result = "Allow SMS permission, then tap Arm SMS send again. Nothing is sent by granting permission."
+                render(); return
+            }
+            smsSubscription = DirectSmsSender.defaultSubscription()
+            if (smsSubscription == null) {
+                result = "Choose a default SMS SIM in your phone's SIM settings (not Ask every time), then arm again. No SMS requested."
+                render(); return
+            }
+        }
         if (useBand.isChecked && !notificationAsked && Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notificationAsked = true
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 3)
@@ -116,13 +132,13 @@ class MacroActivity : Activity() {
         phone.setText("+$normalized")
         draft = MessageDraft(normalized, message.text.toString(), if (smsChoice.isChecked) DraftTarget.SMS else DraftTarget.WHATSAPP_BUSINESS)
         engine.arm()
-        result = "Armed for +$normalized. Enter ⏮ → ⏯ → ⏭ within 8 seconds."
+        result = "Armed for +$normalized. ${if (smsChoice.isChecked) "Matching sends SMS immediately using your selected default SIM." else "Matching opens a WhatsApp Business draft."} Enter ⏮ → ⏯ → ⏭ within 8 seconds."
         if (useBand.isChecked) {
             ownsSession = true
             startForegroundService(Intent(this, PlaybackService::class.java).setAction(PlaybackService.START)
                 .putExtra("macro", true).putExtra("audible", audible.isChecked))
         }
-        Diagnostics.record(this, "Draft macro armed; target=${draft?.target}; media=$ownsSession")
+        Diagnostics.record(this, "Message macro armed; target=${draft?.target}; media=$ownsSession")
         render()
     }
     private fun receive(command: MacroButton, description: String) {
@@ -139,17 +155,22 @@ class MacroActivity : Activity() {
     }
     private fun openDraft() {
         val request = draft ?: return
-        disarm("Sequence matched. Opening a draft, not sending a message.")
+        val subscription = smsSubscription
+        disarm("Sequence matched; macro disarmed before executing action.")
+        if (request.target == DraftTarget.SMS) {
+            result = if (subscription == null) "No SMS SIM selected. No SMS requested; choose a default SIM and arm again."
+                else DirectSmsSender.send(this, request, subscription)
+            return
+        }
         val intent = when (request.target) {
             DraftTarget.WHATSAPP_BUSINESS -> {
                 val uri = Uri.Builder().scheme("https").authority("wa.me").appendPath(request.phone)
                     .appendQueryParameter("text", request.message).build()
                 Intent(Intent.ACTION_VIEW, uri).setPackage(MessageDraft.BUSINESS_PACKAGE)
             }
-            DraftTarget.SMS -> Intent(Intent.ACTION_SENDTO, Uri.fromParts("smsto", "+${request.phone}", null))
-                .putExtra("sms_body", request.message)
+            DraftTarget.SMS -> return
         }
-        val appName = if (request.target == DraftTarget.SMS) "SMS app" else "WhatsApp Business"
+        val appName = "WhatsApp Business"
         if (intent.resolveActivity(packageManager) == null) {
             result = "$appName is not available to open this draft in this Android profile. Install/enable it, then arm again."
             Diagnostics.record(this, "Macro matched; ${request.target} draft handler unavailable")
@@ -167,17 +188,17 @@ class MacroActivity : Activity() {
     }
 
     private fun disarm(reason: String) {
-        engine.disarm(); draft = null
+        engine.disarm(); draft = null; smsSubscription = null
         if (ownsSession) stopService(Intent(this, PlaybackService::class.java))
         ownsSession = false; result = reason
         if (::status.isInitialized) render()
     }
     private fun render() {
-        arm.text = if (engine.armed) "Disarm macro" else "Arm macro"
+        arm.text = if (engine.armed) "Disarm macro" else if (smsChoice.isChecked) "Arm SMS send" else "Arm WhatsApp draft"
         listOf(phone,message,useBand,audible,businessChoice,smsChoice).forEach { it.isEnabled = !engine.armed }
         inputs.forEach { it.isEnabled = engine.armed }
         fun direction(count: Int) = if (count == 0) "unverified" else "input received; band source unverified"
-        status.text = "${if (engine.armed) "ARMED" else "DISARMED"} · sequence ${engine.progress}/3\nLast: $lastInput\n⏮ $previousCount (${direction(previousCount)})\n⏯ $playPauseCount\n⏭ $nextCount (${direction(nextCount)})\n$result\nMedia session activity does not prove a band connection."
+        status.text = "${if (engine.armed) "ARMED" else "DISARMED"} · sequence ${engine.progress}/3\nLast: $lastInput\n⏮ $previousCount (${direction(previousCount)})\n⏯ $playPauseCount\n⏭ $nextCount (${direction(nextCount)})\n$result\nLatest SMS result: ${SmsStatusStore.summary(this)}\nMedia session activity does not prove a band connection."
     }
     override fun onResume() {
         super.onResume()
@@ -194,6 +215,15 @@ class MacroActivity : Activity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (!hasFocus && engine.armed) disarm("Disarmed because the macro screen lost focus.")
+    }
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 4) {
+            result = if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED)
+                "SMS permission granted. Review the recipient/message and tap Arm SMS send."
+                else "SMS permission was not granted. Enable SMS permission in Android app Settings to use direct sending. No SMS requested."
+            render()
+        }
     }
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putString("target", if (smsChoice.isChecked) "SMS" else "WHATSAPP_BUSINESS")

@@ -36,7 +36,7 @@ class MainActivity : Activity() {
         val audible = CheckBox(this).apply { text = "Audible quiet test tone (default: silent playback)" }
         layout.addView(audible)
         fun button(label: String, action: () -> Unit) { layout.addView(Button(this).apply { text = label; setOnClickListener { action() } }) }
-        button("Message macros · WhatsApp Business / SMS") { startActivity(Intent(this, MacroActivity::class.java)) }
+        button("Message macros · Send SMS / WhatsApp draft") { startActivity(Intent(this, MacroActivity::class.java)) }
         button("Play Neon Orbit space shooter") { startActivity(Intent(this, GameActivity::class.java)) }
         button("Start / resume test session") {
             if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {

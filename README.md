@@ -1,3 +1,40 @@
+# Neon Orbit — Band Controller space shooter
+
+The existing Band Controller app now includes **Neon Orbit**, an offline native Canvas space shooter. The original diagnostic screen, service, application ID and build toolchain are retained. Install this APK as an update, then tap **Play Neon Orbit space shooter** on the original screen.
+
+## Play with touch first
+
+Tap **Launch**, hold **◀ / ▶** to steer and hold **FIRE** for continuous lasers. Accessible button clicks also nudge or fire once. Destroy ships (+20) and two-hit asteroids (+30); collisions and escaped threats cost shields. Start with three shields, with a brief grace period after damage. Enemies gradually become faster and spawn more often. **Pause / Resume** freezes the simulation; **Play again** restarts after game over. The best score is saved locally. Use **Sound FX** to mute the synthesized local laser/explosion/hit effects. Touch gameplay needs no band, Huawei Health, media session, Bluetooth permission or internet access.
+
+The starfield, ship engine, neon enemies, laser trails and explosion particles are drawn on Canvas. The field scales proportionally to the available screen area with insets for status/navigation bars. Portrait is used for this vertical game; controls remain native Android buttons. The simulation runs fixed 120 Hz steps driven by display timestamps, clamps long gaps, and does not assume a 60 Hz Redmi display.
+
+## Enable the existing band control path
+
+1. Launch a run using touch first.
+2. Tap **Enable band mode** while the game is visible. On the first notification permission prompt, answer it and tap Enable again. Denying notifications does not prevent a subsequent attempt to enable the foreground media service.
+3. Keep the Band 6 paired through Huawei Health as in the earlier diagnostic experiment. Optionally select **Audible loop** before enabling if this setup needs audible playback for routing. Default playback is silent; it is a real looping local WAV, not an empty foreground service. The short game sound effects are independent of this loop.
+4. Use **Next → right**, **Previous → left**, **Play or Pause → fire**. A raw play/pause toggle also fires. Lasers have a 180 ms cooldown; faster commands are still logged but cannot bypass it. Each movement command nudges a target position; movement is interpolated smoothly. Touch controls continue to work alongside media commands.
+5. The game diagnostic panel shows last media command/time, combined Play/Pause count, Next/Previous counts, game state and media playback state. Counts cover game-mode commands received in this app process, including notification or synthetic media controls. A zero Next/Previous count explicitly says **unverified**. A received command says **source unknown**: neither an active session nor a callback proves a band connection. All callbacks and raw media-key diagnostics remain in the original screen's persistent/shareable log.
+
+**Game mode deliberately treats both PLAY and PAUSE as firing while keeping the local media loop/session in the playing state**, so repeated band presses can keep delivering fire commands. This differs from the original diagnostic mode, where Play starts and Pause pauses actual playback. Return to the original screen and explicitly Start the diagnostic session to test the original behavior again. The game's Pause button pauses the game, independently of media playback. Commands on title/pause/game-over screens are logged but do not move or shoot.
+
+Band mode is explicit and may interrupt another player's audio because Android audio focus is required for this playback session. Touch-only play does not request focus. **Disable band mode** releases the game session and audio focus; it does not disable touch play. Focus loss pauses the game and stops game media playback rather than fighting another app for focus. Leaving/locking/backgrounding the game pauses the run, clears held controls and stops its opted-in media session. Resume explicitly and enable band mode again after returning. Opening the notification shade may also pause the game. The display stays awake during a running foreground game, so band-only play does not time out the screen. Neither gameplay nor audio focus resumes automatically. High scores survive process death; an interrupted run is retained across activity configuration changes but is not restored after the process is killed.
+
+Earlier phone experiments verified media callbacks, including with the phone locked, for the **diagnostic** app. The new gameplay mapping still needs physical-phone verification. Huawei Health/firmware or other media apps can change routing; this app cannot force forwarding, read raw Huawei touches, or identify the originating controller. The default silent loop also needs testing on the phone. If commands stop, try the audible option and ensure this is the selected player. The game never runs unseen behind the lock screen.
+
+## Architecture and validation
+
+- `GameEngine`, `Player`, `Enemy`, `Bullet`, `CollisionManager`, `ScoreManager`: Android-free world state, collision rules, scoring and state transitions.
+- `GameView`: Canvas rendering, frame scheduling and short local effects through `GameAudio`.
+- `BandMediaController`: lifecycle-scoped main-thread bridge from the existing `PlaybackService` callbacks to the visible game's engine. Incoming commands remain logged through `Diagnostics`.
+- `GameActivity`: accessible touch controls, lifecycle, high-score storage, session opt-in and diagnostic panel.
+
+Run `./gradlew testDebugUnitTest assembleDebug lintDebug`. The JUnit suite covers collision boundaries, diagonal near misses, one-hit bullet consumption, asteroid damage/scoring, high-score retention, pause/resume/input gating, three-life game over and restart, escaped threats, movement limits, long-frame clamping and equivalence across frame rates. GitHub Actions runs the unit suite, builds with `./gradlew --no-daemon assembleDebug` and uploads the same `band-controller-debug` artifact. No Android Studio or SDK on your own computer is necessary when building through Actions; the CI runner installs its Android SDK.
+
+Phone acceptance checklist: play a complete touch-only run with Health/band disconnected; verify movement, repeated fire, score, shields, pause/resume, game over/restart and high-score persistence; enable media mode and verify all three mappings; confirm Next/Previous remain unverified before receiving them; lock/unlock or press Home and confirm the run is paused and the game session stops; test notification controls and diagnostic mode again; start another music app and confirm focus loss is respected. Frame pacing, sound levels and Huawei routing must be assessed on the actual phone.
+
+---
+
 # Band Controller
 
 Minimal native Kotlin Android diagnostic app for a Redmi Note 12 / Huawei Band 6 experiment. It tests whether **Android MediaSession commands** reach this app while its local playback session is active. It does not connect to the band, read raw band touch events, bypass Huawei Health, or identify a command's originating device.

@@ -17,5 +17,6 @@ class GameAudio(context: Context) {
             GameSound.EXPLOSION to pool.load(context, R.raw.explosion, 1), GameSound.HIT to pool.load(context, R.raw.hit, 1))
     }
     fun play(sound: GameSound) { ids[sound]?.takeIf { it in loaded }?.let { pool.play(it, .4f, .4f, 1, 0, 1f) } }
+    fun pause() { pool.autoPause() }
     fun release() { pool.release(); loaded.clear() }
 }

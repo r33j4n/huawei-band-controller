@@ -65,6 +65,7 @@ class GameActivity : Activity() {
         bandButton = button("Enable band mode") { if (bandEnabled) disableBand() else enableBand() }
         sessionRow.addView(bandButton, LinearLayout.LayoutParams(0, dp(48), 1f))
         primary = button("Launch") {
+            clearInput()
             when (engine.state) {
                 GameState.TITLE, GameState.GAME_OVER -> engine.start()
                 GameState.RUNNING -> engine.pause()

@@ -33,7 +33,7 @@ class GameView(context: Context, val engine: GameEngine) : View(context), Choreo
     fun setActive(value: Boolean) {
         active = value; lastFrame = 0L
         Choreographer.getInstance().removeFrameCallback(this)
-        if (value) schedule() else engine.drainSounds()
+        if (value) schedule() else { engine.drainSounds(); audio?.pause() }
     }
     private fun schedule() { if (active && isAttachedToWindow) Choreographer.getInstance().postFrameCallback(this) }
     override fun doFrame(frameTimeNanos: Long) {

@@ -33,6 +33,8 @@ class PlaybackService : Service() {
     private var playing = false
     private var audible = false
     private var gameMode = false
+    private var macroMode = false
+    private val interactiveMode get() = gameMode || macroMode
     override fun onCreate() {
         super.onCreate()
         getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL, "Test media session", NotificationManager.IMPORTANCE_LOW))
@@ -43,8 +45,8 @@ class PlaybackService : Service() {
                 Diagnostics.record(this, "Audio focus change: $change")
                 if (change < 0) {
                     hasFocus = false; setPlayback(false)
-                    if (gameMode) {
-                        BandMediaController.unavailable("Audio focus lost · game paused; band mode stopped")
+                    if (interactiveMode) {
+                        BandMediaController.unavailable("Audio focus lost · media controls stopped")
                         stopSelf()
                     }
                 }
@@ -65,13 +67,13 @@ class PlaybackService : Service() {
                         KeyEvent.KEYCODE_MEDIA_PLAY -> onPlay()
                         KeyEvent.KEYCODE_MEDIA_PAUSE -> onPause()
                         KeyEvent.KEYCODE_MEDIA_STOP -> onStop()
-                        else -> { event("TOGGLE"); setPlayback(if (gameMode) true else !playing) }
+                        else -> { event("TOGGLE"); setPlayback(if (interactiveMode) true else !playing) }
                     }
                 }
                 return true
             }
             override fun onPlay() { event("PLAY"); setPlayback(true) }
-            override fun onPause() { event("PAUSE"); setPlayback(gameMode) }
+            override fun onPause() { event("PAUSE"); setPlayback(interactiveMode) }
             override fun onSkipToNext() { event("NEXT"); player?.seekTo(0) }
             override fun onSkipToPrevious() { event("PREVIOUS"); player?.seekTo(0) }
             override fun onStop() { Diagnostics.record(this@PlaybackService, "Session stop command"); stopSelf() }
@@ -80,7 +82,7 @@ class PlaybackService : Service() {
             isLooping = true
             setOnErrorListener { _, what, extra ->
                 Diagnostics.record(this@PlaybackService, "Playback error: what=$what extra=$extra")
-                if (gameMode) BandMediaController.unavailable("Playback failed · touch controls available")
+                if (interactiveMode) BandMediaController.unavailable("Playback failed · touch controls available")
                 stopSelf()
                 true
             }
@@ -88,27 +90,28 @@ class PlaybackService : Service() {
         Diagnostics.record(this, "Service created; local media loaded=${player != null}")
     }
     private fun event(name: String) {
-        Diagnostics.record(this, "Session callback: $name (source not identifiable; game=$gameMode)", name)
-        if (gameMode) BandMediaController.dispatch(name)
+        Diagnostics.record(this, "Session callback: $name (source not identifiable; game=$gameMode; macro=$macroMode)", name)
+        if (interactiveMode) BandMediaController.dispatch(name)
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == STOP) { stopSelf(); return START_NOT_STICKY }
-        // Do not let a remembered media-button receiver restart an ended game session.
+        // Do not let a remembered receiver restart an ended game or macro session.
         // An explicit diagnostic START below restores the original diagnostic behavior.
         val preferences = getSharedPreferences("diagnostics", MODE_PRIVATE)
         if (intent?.action != START && !foreground && preferences.getBoolean("gameSession", false)) {
-            Diagnostics.record(this, "Ignored stale game media intent; game mode needs explicit enable")
+            Diagnostics.record(this, "Ignored stale interactive media intent; explicit enable required")
             stopSelf(); return START_NOT_STICKY
         }
         // Foreground first, including before requesting audio focus on Android 15.
         if (!foreground) { startForeground(1, notification()); foreground = true }
         session.isActive = true
         if (intent?.action == START) {
-            gameMode = intent.getBooleanExtra("game", false)
-            preferences.edit().putBoolean("gameSession", gameMode).apply()
+            macroMode = intent.getBooleanExtra("macro", false)
+            gameMode = !macroMode && intent.getBooleanExtra("game", false)
+            preferences.edit().putBoolean("gameSession", interactiveMode).apply()
             audible = intent.getBooleanExtra("audible", false)
             session.setMetadata(MediaMetadataCompat.Builder()
-                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, if (gameMode) "Neon Orbit · Play/Pause fires" else "Band Controller test loop")
+                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, when { macroMode -> "Macro · Previous / Play / Next"; gameMode -> "Neon Orbit · Play/Pause fires"; else -> "Band Controller test loop" })
                 .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, "Local media · connection not detected").build())
             Diagnostics.record(this, "UI start; audible=$audible (not counted as a remote event)")
             setPlayback(true)
@@ -125,13 +128,13 @@ class PlaybackService : Service() {
             Diagnostics.record(this, "Audio focus request: $result")
             if (!hasFocus) {
                 publishState(false)
-                if (gameMode) { BandMediaController.unavailable("Audio focus denied · touch mode available"); stopSelf() }
+                if (interactiveMode) { BandMediaController.unavailable("Audio focus denied · touch mode available"); stopSelf() }
                 return
             }
         }
         if (value && player == null) {
             Diagnostics.record(this, "ERROR: local player unavailable"); publishState(false)
-            if (gameMode) { BandMediaController.unavailable("Local playback unavailable · band mode stopped"); stopSelf() }
+            if (interactiveMode) { BandMediaController.unavailable("Local playback unavailable · media controls stopped"); stopSelf() }
             return
         }
         player?.setVolume(if (audible) 1f else 0f, if (audible) 1f else 0f)
@@ -148,20 +151,20 @@ class PlaybackService : Service() {
         if (foreground) getSystemService(NotificationManager::class.java).notify(1, notification())
     }
     private fun notification(): Notification {
-        val destination = if (gameMode) GameActivity::class.java else MainActivity::class.java
+        val destination = when { macroMode -> MacroActivity::class.java; gameMode -> GameActivity::class.java; else -> MainActivity::class.java }
         val openIntent = Intent(this, destination).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         val open = PendingIntent.getActivity(this, 0, openIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         return NotificationCompat.Builder(this, CHANNEL).setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentTitle("Band Controller").setContentText(if (gameMode) "Neon Orbit · Play/Pause fires" else if (playing) "Test loop playing" else "Test loop paused")
+            .setContentTitle("Band Controller").setContentText(when { macroMode -> "Macro controls · draft only"; gameMode -> "Neon Orbit · Play/Pause fires"; playing -> "Test loop playing"; else -> "Test loop paused" })
             .setContentIntent(open).setOnlyAlertOnce(true).setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .addAction(android.R.drawable.ic_media_previous, if (gameMode) "Left" else "Previous", MediaButtonReceiver.buildMediaButtonPendingIntent(this, PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS))
-            .addAction(if (playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play, if (gameMode) "Fire" else if (playing) "Pause" else "Play", MediaButtonReceiver.buildMediaButtonPendingIntent(this, if (playing) PlaybackStateCompat.ACTION_PAUSE else PlaybackStateCompat.ACTION_PLAY))
+            .addAction(if (playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play, if (macroMode) "Macro input" else if (gameMode) "Fire" else if (playing) "Pause" else "Play", MediaButtonReceiver.buildMediaButtonPendingIntent(this, if (playing) PlaybackStateCompat.ACTION_PAUSE else PlaybackStateCompat.ACTION_PLAY))
             .addAction(android.R.drawable.ic_media_next, if (gameMode) "Right" else "Next", MediaButtonReceiver.buildMediaButtonPendingIntent(this, PlaybackStateCompat.ACTION_SKIP_TO_NEXT))
             .setStyle(MediaStyle().setMediaSession(session.sessionToken).setShowActionsInCompactView(0,1,2)).build()
     }
     override fun onTaskRemoved(rootIntent: Intent?) { Diagnostics.record(this, "Task removed; service may be restricted by phone power policy"); super.onTaskRemoved(rootIntent) }
     override fun onDestroy() {
-        if (gameMode) BandMediaController.unavailable("Game media session stopped · enable again if needed")
+        if (interactiveMode) BandMediaController.unavailable("Media session stopped · enable again if needed")
         player?.release(); player = null
         audio.abandonAudioFocusRequest(focus)
         session.isActive = false; session.release()

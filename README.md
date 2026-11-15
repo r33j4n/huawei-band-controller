@@ -1,3 +1,23 @@
+# Message macros — WhatsApp Business and SMS drafts
+
+Open **Message macros · WhatsApp Business / SMS** in the existing Band Controller app. This adds an Android macro engine without replacing the game or diagnostic session.
+
+1. Select **WhatsApp Business draft** or **SMS draft**. Only the chosen app opens per match; it does not launch both at once.
+2. Review/edit the recipient and text. The defaults are **+94 76 106 9598** and exactly **Hi This message is send by huawei band**. The provided local number `0761069598` is interpreted as Sri Lankan (+94); edit the country code if that is not intended. Other countries require an international number.
+3. For touch-only use, leave **Use band media controls** unchecked. For band input, check it (optionally enable the audible loop if silent routing fails). A notification permission prompt may require tapping Arm again afterward; notification denial does not prevent a subsequent foreground session attempt.
+4. Tap **Arm macro**, then press **⏮ → ⏯ → ⏭** (Previous → Play/Pause → Next) within **8 seconds total**. Use the macro screen's native buttons, band music controls routed through the existing MediaSession, or a mixture. Both explicit Play and Pause callbacks map to the middle symbol; a raw Toggle does too. Incorrect order resets progress. A new Previous starts a fresh attempt.
+5. A match opens the selected messaging app with the recipient and text prefilled. **Review and tap Send in that app yourself.** Every match disarms the macro; return and arm it again for another draft. Leaving, locking or losing focus on the macro screen also disarms it, clears partial input and releases its opted-in media session. This is a foreground macro, not a background/lock-screen automation service.
+
+WhatsApp Business uses the package `com.whatsapp.w4b` and a [click-to-chat link](https://faq.whatsapp.com/5913398998672934). Install/update Business and sign in on the phone. It uses the account/profile active in Business; the controller cannot log in for you or select another account. It never falls back to personal WhatsApp or a browser if Business is missing. WhatsApp checks whether the number is registered. The SMS option opens an installed messaging app using Android `ACTION_SENDTO` and `sms_body`, with no SMS-send permission. Some messaging apps may handle prefilled text differently; review the actual draft.
+
+**No message is sent automatically.** No Accessibility Service, automated Send-button tapping, account scraping, credential collection or WhatsApp API token is used. Unattended WhatsApp sending would require a separately configured Meta WhatsApp Business Platform integration, with its own business sender setup and applicable messaging rules; merely installing WhatsApp Business is not such an API setup. The app cannot verify whether you tapped Send or whether a message was delivered. It reports only that a draft was requested. WhatsApp needs its normal network access to send; SMS uses the phone's normal messaging service.
+
+Game input never runs macros. Macro input is routed only to the visible, explicitly armed macro screen. Media callbacks and touch inputs are logged with source labels; an Android callback cannot prove it came from the band. Diagnostic logs omit recipient/message contents for this feature. Macro status shows the latest input, counts and progress; received touchscreen inputs do not establish band delivery. Configured fields are frozen while armed and preserved across activity recreation, but the macro never restores itself armed. The original media diagnostics and game remain available.
+
+Tests cover sequence ordering, timeout boundaries, total elapsed time, resets/rearming, disarmed input, one-shot execution, Play/Pause normalization, recipient validation and preservation of the requested text. Run `./gradlew testDebugUnitTest assembleDebug lintDebug`; CI runs the full game/macro unit suite and uploads `band-controller-debug` as before. On the phone, test the touch sequence for each target first, verify wrong-order/timeout/disarm behavior, then enable media input and repeat from the band. Verify the correct Business account, recipient and exact text in the actual composer before Send. Device-specific messaging intent behavior and new macro-mode band routing require physical-phone verification.
+
+---
+
 # Neon Orbit — Band Controller space shooter
 
 The existing Band Controller app now includes **Neon Orbit**, an offline native Canvas space shooter. The original diagnostic screen, service, application ID and build toolchain are retained. Install this APK as an update, then tap **Play Neon Orbit space shooter** on the original screen.
